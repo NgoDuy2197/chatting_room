@@ -6,8 +6,12 @@ let users = new Map();
 let foods = new Map();
 let messages = new Map();
 let keys = {};
-let gameLoop;
 let score = 0;
+
+// Tunables
+const MOVE_SPEED = 5;          // pixels per frame (at 60fps)
+const LERP = 0.22;             // how quickly remote players glide to their target
+const PREVIEW_LEN = 120;       // chars before a message gets a "Xem thêm" button
 
 // Character emojis for users
 const characterEmojis = ['😀', '😎', '🤖', '👾', '🐱', '🐶', '🦊', '🐸', '🐙', '🦄', '🌈', '⭐', '🎮', '🎯', '🎪'];
@@ -37,18 +41,24 @@ const modalRoomId = document.getElementById('modalRoomId');
 const modalPlayerCount = document.getElementById('modalPlayerCount');
 const modalYourScore = document.getElementById('modalYourScore');
 
+// Message modal elements
+const messageModal = document.getElementById('messageModal');
+const closeMessageModal = document.getElementById('closeMessageModal');
+const messageModalUser = document.getElementById('messageModalUser');
+const messageModalText = document.getElementById('messageModalText');
+
+// Escape HTML so messages can't break the layout / inject markup
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
 // Initialize the application
 function init() {
-    // Connect to Socket.IO server
     socket = io();
-    
-    // Set up event listeners
     setupEventListeners();
-    
-    // Set up keyboard controls
     setupKeyboardControls();
-    
-    // Start game loop
     startGameLoop();
 }
 
@@ -57,25 +67,42 @@ function setupEventListeners() {
     // Welcome screen buttons
     createRoomBtn.addEventListener('click', handleCreateRoom);
     joinRoomBtn.addEventListener('click', handleJoinRoom);
-    
+
+    // Allow Enter to join from the welcome inputs
+    [roomIdInput, usernameInput].forEach(inp => {
+        inp.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') handleJoinRoom();
+        });
+    });
+
     // Chat input
     chatInput.addEventListener('keypress', handleChatKeyPress);
     chatInput.addEventListener('input', updateCharCount);
     sendMessageBtn.addEventListener('click', sendMessage);
-    
-    // Modal events
+
+    // Room modal events
     roomInfoBtn.addEventListener('click', showRoomModal);
     closeModal.addEventListener('click', hideRoomModal);
     leaveRoomBtn.addEventListener('click', handleLeaveRoom);
     copyRoomIdBtn.addEventListener('click', copyRoomId);
-    
-    // Close modal when clicking outside
+
+    // Message modal events
+    closeMessageModal.addEventListener('click', hideMessageModal);
+
+    // Close modals when clicking outside
     window.addEventListener('click', (e) => {
-        if (e.target === roomModal) {
+        if (e.target === roomModal) hideRoomModal();
+        if (e.target === messageModal) hideMessageModal();
+    });
+
+    // Close modals with Escape
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
             hideRoomModal();
+            hideMessageModal();
         }
     });
-    
+
     // Socket.IO events
     socket.on('roomJoined', handleRoomJoined);
     socket.on('userJoined', handleUserJoined);
@@ -90,47 +117,58 @@ function setupEventListeners() {
 // Set up keyboard controls
 function setupKeyboardControls() {
     document.addEventListener('keydown', (e) => {
-        keys[e.key.toLowerCase()] = true;
+        const typing = document.activeElement === chatInput;
+
+        // Spacebar => "pop" the player's character (only while playing, not typing)
+        if (e.code === 'Space' && !typing && gameScreen.classList.contains('active')) {
+            e.preventDefault();
+            popSelf();
+            return;
+        }
+
+        if (!typing) {
+            keys[e.key.toLowerCase()] = true;
+        }
     });
-    
+
     document.addEventListener('keyup', (e) => {
         keys[e.key.toLowerCase()] = false;
     });
+
+    // Stop drifting if the window loses focus
+    window.addEventListener('blur', () => { keys = {}; });
 }
 
-// Handle create room
+// Make the player's own character puff up then settle back
+function popSelf() {
+    const el = document.querySelector('.user-character.self');
+    if (!el) return;
+    el.classList.remove('pop');
+    void el.offsetWidth; // force reflow so the animation can restart
+    el.classList.add('pop');
+}
+
+// Handle create / join room
 function handleCreateRoom() {
     const roomId = roomIdInput.value.trim();
-    const username = usernameInput.value.trim();
-    
     if (!roomId) {
-        showNotification('Please enter a room ID', 'error');
+        showNotification('Hãy nhập tên phòng nhé!', 'error');
         return;
     }
-    
-    // Check if room already exists (this will be handled by server)
-    joinRoom(roomId, username, true);
+    joinRoom(roomId, usernameInput.value.trim(), true);
 }
 
-// Handle join room
 function handleJoinRoom() {
     const roomId = roomIdInput.value.trim();
-    const username = usernameInput.value.trim();
-    
     if (!roomId) {
-        showNotification('Please enter a room ID', 'error');
+        showNotification('Hãy nhập tên phòng nhé!', 'error');
         return;
     }
-    
-    joinRoom(roomId, username, false);
+    joinRoom(roomId, usernameInput.value.trim(), false);
 }
 
-// Join room function
-function joinRoom(roomId, username, isCreating) {
-    socket.emit('joinRoom', {
-        roomId: roomId,
-        username: username
-    });
+function joinRoom(roomId, username) {
+    socket.emit('joinRoom', { roomId, username });
 }
 
 // Handle room joined
@@ -140,43 +178,41 @@ function handleRoomJoined(data) {
     users.clear();
     foods.clear();
     messages.clear();
-    
-    // Clear canvas
     gameCanvas.innerHTML = '';
-    
-    // Add all users and render them
+
     data.users.forEach(user => {
+        initUserTargets(user);
         users.set(user.id, user);
         renderUser(user);
     });
-    
-    // Add all foods and render them
+
     data.foods.forEach(food => {
         foods.set(food.id, food);
         renderFood(food);
     });
-    
-    // Add all messages
-    data.messages.forEach(message => {
-        messages.set(message.id, message);
-    });
-    
-    // Update UI
+
+    data.messages.forEach(message => messages.set(message.id, message));
+
     updateRoomInfo();
-    
-    // Switch to game screen
     welcomeScreen.classList.remove('active');
     gameScreen.classList.add('active');
-    
-    // Focus on chat input
+
     setTimeout(() => {
         chatInput.focus();
-        updateCharCount(); // Initialize character counter
+        updateCharCount();
     }, 100);
+
+    showNotification('Chào mừng tới phòng! Dùng WASD/phím mũi tên để di chuyển, Space để nhún.', 'success');
+}
+
+function initUserTargets(user) {
+    user.tx = user.x;
+    user.ty = user.y;
 }
 
 // Handle user joined
 function handleUserJoined(user) {
+    initUserTargets(user);
     users.set(user.id, user);
     updateRoomInfo();
     renderUser(user);
@@ -189,29 +225,26 @@ function handleUserLeft(userId) {
     removeUser(userId);
 }
 
-// Handle user moved
+// Handle user moved (remote) -> set glide target, animation does the rest
 function handleUserMoved(data) {
     const user = users.get(data.userId);
-    if (user) {
-        user.x = data.x;
-        user.y = data.y;
-        updateUserPosition(user);
+    if (user && user.id !== socket.id) {
+        user.tx = data.x;
+        user.ty = data.y;
     }
 }
 
 // Handle new message
 function handleNewMessage(message) {
     messages.set(message.id, message);
-    
-    // Create message bubble
     createMessageBubble(message);
-    
-    // Remove message after 10 seconds
+
     setTimeout(() => {
         messages.delete(message.id);
-        const messageElement = document.querySelector(`[data-message-id="${message.id}"]`);
-        if (messageElement) {
-            messageElement.remove();
+        const el = document.querySelector(`[data-message-id="${message.id}"]`);
+        if (el) {
+            el.classList.add('fade-out');
+            setTimeout(() => el.remove(), 300);
         }
     }, 10000);
 }
@@ -229,8 +262,6 @@ function handleFoodEaten(data) {
         updateScore();
         showScoreIncrease();
     }
-    
-    // Remove food from map using foodId
     if (data.foodId) {
         foods.delete(data.foodId);
         removeFood(data.foodId);
@@ -249,66 +280,83 @@ function handleFoodRemoved(data) {
 function sendMessage() {
     const message = chatInput.value.trim();
     if (!message) return;
-    
+
     if (message.length > 512) {
-        showNotification('Message too long! Maximum 512 characters allowed.', 'error');
+        showNotification('Tin nhắn quá dài! Tối đa 512 ký tự.', 'error');
         return;
     }
-    
+
     if (currentRoom) {
-        socket.emit('sendMessage', {
-            roomId: currentRoom,
-            message: message
-        });
+        socket.emit('sendMessage', { roomId: currentRoom, message });
         chatInput.value = '';
-        updateCharCount(); // Reset character counter
+        updateCharCount();
     }
 }
 
-// Handle chat key press
 function handleChatKeyPress(e) {
-    if (e.key === 'Enter') {
-        sendMessage();
-    }
+    if (e.key === 'Enter') sendMessage();
 }
 
-// Create message bubble
+// Create message bubble (with "Xem thêm" for long messages)
 function createMessageBubble(message) {
-    const messageElement = document.createElement('div');
-    messageElement.className = 'chat-message';
-    messageElement.setAttribute('data-message-id', message.id);
-    messageElement.style.left = `${message.x}px`;
-    messageElement.style.top = `${message.y - 80}px`;
-    
-    messageElement.innerHTML = `
-        <div class="username">${message.username}</div>
-        <div class="message-text">${message.message}</div>
-    `;
-    
-    gameCanvas.appendChild(messageElement);
+    const el = document.createElement('div');
+    el.className = 'chat-message';
+    el.setAttribute('data-message-id', message.id);
+    el.style.left = `${message.x}px`;
+    el.style.top = `${message.y - 80}px`;
+
+    const text = message.message;
+    let body;
+    if (text.length > PREVIEW_LEN) {
+        const preview = escapeHtml(text.slice(0, PREVIEW_LEN).trimEnd()) + '…';
+        body = `<div class="message-text">${preview}</div>
+                <button class="read-more-btn" type="button">📖 Xem thêm</button>`;
+    } else {
+        body = `<div class="message-text">${escapeHtml(text)}</div>`;
+    }
+
+    el.innerHTML = `<div class="username">${escapeHtml(message.username)}</div>${body}`;
+
+    const btn = el.querySelector('.read-more-btn');
+    if (btn) {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openMessageModal(message.username, text);
+        });
+    }
+
+    gameCanvas.appendChild(el);
+}
+
+// Open the full-message window
+function openMessageModal(username, text) {
+    messageModalUser.textContent = `💬 ${username}`;
+    messageModalText.textContent = text;
+    messageModal.style.display = 'block';
+}
+
+function hideMessageModal() {
+    messageModal.style.display = 'none';
 }
 
 // Update room info
 function updateRoomInfo() {
-    roomInfo.textContent = `Room: ${currentRoom}`;
-    playerCount.textContent = `Players: ${users.size}`;
+    roomInfo.textContent = `Phòng: ${currentRoom}`;
+    playerCount.textContent = `Người chơi: ${users.size}`;
 }
 
 // Update score
 function updateScore() {
-    scoreText.textContent = `Score: ${score}`;
+    scoreText.textContent = `Điểm: ${score}`;
 }
 
-// Show score increase animation
 function showScoreIncrease() {
     const scoreDisplay = document.getElementById('scoreDisplay');
     scoreDisplay.classList.add('score-increase');
-    setTimeout(() => {
-        scoreDisplay.classList.remove('score-increase');
-    }, 500);
+    setTimeout(() => scoreDisplay.classList.remove('score-increase'), 500);
 }
 
-// Show room modal
+// Room modal
 function showRoomModal() {
     modalRoomId.textContent = currentRoom;
     modalPlayerCount.textContent = users.size;
@@ -316,63 +364,52 @@ function showRoomModal() {
     roomModal.style.display = 'block';
 }
 
-// Hide room modal
 function hideRoomModal() {
     roomModal.style.display = 'none';
 }
 
 // Handle leave room
 function handleLeaveRoom() {
-    if (confirm('Are you sure you want to leave this room?')) {
-        // Disconnect from current room
-        if (currentRoom) {
-            socket.emit('leaveRoom', { roomId: currentRoom });
-        }
-        
-        // Reset game state
+    if (confirm('Bạn có chắc muốn rời phòng?')) {
+        if (currentRoom) socket.emit('leaveRoom', { roomId: currentRoom });
+
         currentRoom = null;
         currentUser = null;
         users.clear();
         foods.clear();
         messages.clear();
         score = 0;
-        
-        // Switch back to welcome screen
+
         gameScreen.classList.remove('active');
         welcomeScreen.classList.add('active');
-        
-        // Clear inputs
+
         roomIdInput.value = '';
         usernameInput.value = '';
-        
-        // Hide modal
+
         hideRoomModal();
-        
-        showNotification('You have left the room', 'info');
+        showNotification('Bạn đã rời phòng', 'info');
     }
 }
 
-// Copy room ID to clipboard
+// Copy room ID
 function copyRoomId() {
     navigator.clipboard.writeText(currentRoom).then(() => {
-        showNotification('Room ID copied to clipboard!', 'success');
+        showNotification('Đã sao chép tên phòng!', 'success');
     }).catch(() => {
-        showNotification('Failed to copy room ID', 'error');
+        showNotification('Không sao chép được tên phòng', 'error');
     });
 }
 
 // Update character count
 function updateCharCount() {
-    const currentLength = chatInput.value.length;
-    charCount.textContent = currentLength;
-    
-    // Change color based on length
-    if (currentLength > 450) {
+    const len = chatInput.value.length;
+    charCount.textContent = len;
+    if (len > 450) {
         charCount.style.color = '#ff6b6b';
-    } else if (currentLength > 400) {
+    } else if (len > 400) {
         charCount.style.color = '#ffa726';
     } else {
-        charCount.style.color = '#667eea';
+        charCount.style.color = '#7c9cff';
     }
 }
 
@@ -381,37 +418,44 @@ function showNotification(message, type = 'info') {
     const notification = document.createElement('div');
     notification.className = `notification ${type}`;
     notification.textContent = message;
-    
+
     const container = document.getElementById('notificationContainer');
     container.appendChild(notification);
-    
-    // Remove notification after animation
+
     setTimeout(() => {
-        if (notification.parentNode) {
-            notification.parentNode.removeChild(notification);
-        }
+        if (notification.parentNode) notification.parentNode.removeChild(notification);
     }, 3000);
 }
 
-// Start game loop
+// ----- Smooth game loop (requestAnimationFrame) -----
+let lastFrame = performance.now();
+
 function startGameLoop() {
-    gameLoop = setInterval(() => {
-        if (currentUser && currentRoom) {
-            handleMovement();
-        }
-    }, 32); // ~30 FPS for better performance
+    lastFrame = performance.now();
+    requestAnimationFrame(animate);
 }
 
-// Movement throttling
+function animate(now) {
+    // dt in "frames" (1 = 60fps); clamped so a stutter doesn't teleport players
+    const dt = Math.min(3, (now - lastFrame) / 16.67) || 1;
+    lastFrame = now;
+
+    if (currentUser && currentRoom) handleMovement(dt);
+    interpolateRemoteUsers(dt);
+
+    requestAnimationFrame(animate);
+}
+
+// Movement throttling for the network
 let lastMoveTime = 0;
-const MOVE_THROTTLE = 50; // Send movement every 50ms instead of every frame
+const MOVE_THROTTLE = 50;
 let movementTimeout = null;
 
-// Handle movement
-function handleMovement() {
-    const speed = 5;
+// Handle local player movement
+function handleMovement(dt) {
+    const speed = MOVE_SPEED * dt;
     let moved = false;
-    
+
     if (keys['w'] || keys['arrowup']) {
         currentUser.y = Math.max(30, currentUser.y - speed);
         moved = true;
@@ -428,123 +472,109 @@ function handleMovement() {
         currentUser.x = Math.min(window.innerWidth - 30, currentUser.x + speed);
         moved = true;
     }
-    
-    // Always update local position immediately for smooth movement
-    if (moved) {
-        updateUserPosition(currentUser);
-        
-        // Check for local food collision for immediate feedback
-        checkLocalFoodCollision();
-        
-        // Throttle server updates to reduce network traffic
-        const now = Date.now();
-        if (now - lastMoveTime > MOVE_THROTTLE) {
-            // Clear any pending movement
-            if (movementTimeout) {
-                clearTimeout(movementTimeout);
-            }
-            
-            // Send movement immediately
-            socket.emit('moveUser', {
-                roomId: currentRoom,
-                x: currentUser.x,
-                y: currentUser.y
-            });
-            lastMoveTime = now;
-        } else {
-            // Debounce movement - send final position after stopping
-            if (movementTimeout) {
-                clearTimeout(movementTimeout);
-            }
-            movementTimeout = setTimeout(() => {
-                socket.emit('moveUser', {
-                    roomId: currentRoom,
-                    x: currentUser.x,
-                    y: currentUser.y
-                });
-                lastMoveTime = Date.now();
-            }, 100);
-        }
+
+    if (!moved) return;
+
+    updateUserPosition(currentUser);
+    checkLocalFoodCollision();
+
+    const now = Date.now();
+    if (now - lastMoveTime > MOVE_THROTTLE) {
+        if (movementTimeout) clearTimeout(movementTimeout);
+        socket.emit('moveUser', { roomId: currentRoom, x: currentUser.x, y: currentUser.y });
+        lastMoveTime = now;
+    } else {
+        if (movementTimeout) clearTimeout(movementTimeout);
+        movementTimeout = setTimeout(() => {
+            socket.emit('moveUser', { roomId: currentRoom, x: currentUser.x, y: currentUser.y });
+            lastMoveTime = Date.now();
+        }, 100);
     }
 }
 
-// Check for local food collision
+// Smoothly glide remote players toward their last reported position
+function interpolateRemoteUsers(dt) {
+    const factor = Math.min(1, LERP * dt);
+    users.forEach(user => {
+        if (user.id === socket.id) return;
+        if (user.tx === undefined) initUserTargets(user);
+
+        const dx = user.tx - user.x;
+        const dy = user.ty - user.y;
+
+        if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) {
+            if (user.x !== user.tx || user.y !== user.ty) {
+                user.x = user.tx;
+                user.y = user.ty;
+                updateUserPosition(user);
+            }
+            return;
+        }
+
+        user.x += dx * factor;
+        user.y += dy * factor;
+        updateUserPosition(user);
+    });
+}
+
+// Local food collision feedback
 function checkLocalFoodCollision() {
     foods.forEach(food => {
-        const distanceX = Math.abs(food.x - currentUser.x);
-        const distanceY = Math.abs(food.y - currentUser.y);
-        
-        if (distanceX < 40 && distanceY < 40) {
-            // Visual feedback - make food glow or shake
-            const foodElement = document.querySelector(`[data-food-id="${food.id}"]`);
-            if (foodElement) {
-                foodElement.style.transform = 'scale(1.2)';
-                setTimeout(() => {
-                    foodElement.style.transform = 'scale(1)';
-                }, 200);
-            }
+        if (Math.abs(food.x - currentUser.x) < 40 && Math.abs(food.y - currentUser.y) < 40) {
+            const el = document.querySelector(`[data-food-id="${food.id}"]`);
+            if (el) el.classList.add('food-near');
         }
     });
 }
 
-
-
 // Render food element
 function renderFood(food) {
-    const foodElement = document.createElement('div');
-    foodElement.className = 'food-item';
-    foodElement.setAttribute('data-food-id', food.id);
-    foodElement.textContent = food.emoji;
-    foodElement.style.left = `${food.x}px`;
-    foodElement.style.top = `${food.y}px`;
-    gameCanvas.appendChild(foodElement);
+    const el = document.createElement('div');
+    el.className = 'food-item';
+    el.setAttribute('data-food-id', food.id);
+    el.textContent = food.emoji;
+    el.style.left = `${food.x}px`;
+    el.style.top = `${food.y}px`;
+    gameCanvas.appendChild(el);
 }
 
 // Render user element
 function renderUser(user) {
-    const userElement = document.createElement('div');
-    userElement.className = 'user-character';
-    userElement.setAttribute('data-user-id', user.id);
-    if (user.id === socket.id) {
-        userElement.classList.add('self');
-    }
-    userElement.textContent = characterEmojis[user.id.charCodeAt(0) % characterEmojis.length];
-    userElement.style.left = `${user.x - 30}px`;
-    userElement.style.top = `${user.y - 30}px`;
-    userElement.style.backgroundColor = user.color;
-    userElement.title = user.username;
-    gameCanvas.appendChild(userElement);
+    const el = document.createElement('div');
+    el.className = 'user-character';
+    el.setAttribute('data-user-id', user.id);
+    if (user.id === socket.id) el.classList.add('self');
+    el.textContent = characterEmojis[user.id.charCodeAt(0) % characterEmojis.length];
+    el.style.left = `${user.x - 30}px`;
+    el.style.top = `${user.y - 30}px`;
+    el.style.backgroundColor = user.color;
+    el.title = user.username;
+    gameCanvas.appendChild(el);
 }
 
 // Update user position
 function updateUserPosition(user) {
-    const userElement = document.querySelector(`[data-user-id="${user.id}"]`);
-    if (userElement) {
-        userElement.style.left = `${user.x - 30}px`;
-        userElement.style.top = `${user.y - 30}px`;
+    const el = document.querySelector(`[data-user-id="${user.id}"]`);
+    if (el) {
+        el.style.left = `${user.x - 30}px`;
+        el.style.top = `${user.y - 30}px`;
     }
 }
 
-// Remove user element
+// Remove elements
 function removeUser(userId) {
-    const userElement = document.querySelector(`[data-user-id="${userId}"]`);
-    if (userElement) {
-        userElement.remove();
-    }
+    const el = document.querySelector(`[data-user-id="${userId}"]`);
+    if (el) el.remove();
 }
 
-// Remove food element
 function removeFood(foodId) {
-    const foodElement = document.querySelector(`[data-food-id="${foodId}"]`);
-    if (foodElement) {
-        foodElement.remove();
-    }
+    const el = document.querySelector(`[data-food-id="${foodId}"]`);
+    if (el) el.remove();
 }
 
 // Handle window resize
 window.addEventListener('resize', () => {
     if (currentUser) {
-        // Keep user within bounds
         currentUser.x = Math.min(window.innerWidth - 30, Math.max(30, currentUser.x));
         currentUser.y = Math.min(window.innerHeight - 30, Math.max(30, currentUser.y));
         updateUserPosition(currentUser);
