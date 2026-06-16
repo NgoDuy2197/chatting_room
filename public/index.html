@@ -1,102 +1,138 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="vi">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chating Room Guy - Fun Chat Game</title>
+    <title>Chating Room Guy — Fun Chat Game</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
     <script src="/socket.io/socket.io.js"></script>
 </head>
 <body>
-    <!-- Welcome Screen -->
-    <div id="welcomeScreen" class="screen active">
-        <div class="welcome-container">
-            <div class="logo">
-                <h1>🎮 Chating Room Guy</h1>
-                <p>Join the fun chat adventure!</p>
-            </div>
-            
-            <div class="room-form">
-                <div class="input-group">
-                    <input type="text" id="roomId" placeholder="Enter Room ID" maxlength="20">
-                    <input type="text" id="username" placeholder="Your Name (optional)" maxlength="15">
+
+<!-- Welcome Screen -->
+<div id="welcomeScreen" class="screen active">
+    <div class="welcome-container">
+        <div class="logo">
+            <div class="logo-icon">🎮</div>
+            <h1>Chating Room Guy</h1>
+            <p>Tham gia cuộc phiêu lưu chat vui vẻ!</p>
+        </div>
+
+        <div class="room-form">
+            <div class="input-group">
+                <div class="input-wrapper">
+                    <span class="input-icon">🏠</span>
+                    <input type="text" id="roomId" placeholder="Tên phòng" maxlength="20">
                 </div>
-                
-                <div class="button-group">
-                    <button id="createRoom" class="btn btn-primary">Create Room</button>
-                    <button id="joinRoom" class="btn btn-secondary">Join Room</button>
+                <div class="input-wrapper">
+                    <span class="input-icon">👤</span>
+                    <input type="text" id="username" placeholder="Tên của bạn (tuỳ chọn)" maxlength="15">
+                </div>
+            </div>
+
+            <div class="button-group">
+                <button id="createRoom" class="btn btn-primary">✨ Tạo phòng</button>
+                <button id="joinRoom" class="btn btn-secondary">🚀 Vào phòng</button>
+            </div>
+        </div>
+
+        <div class="welcome-hints">
+            <span>WASD di chuyển</span>
+            <span>Space nhún</span>
+            <span>1–5 reaction</span>
+        </div>
+    </div>
+</div>
+
+<!-- Game Screen -->
+<div id="gameScreen" class="screen">
+    <!-- Game Canvas -->
+    <div id="gameCanvas" class="game-canvas"></div>
+
+    <!-- HUD Top-Left: Score -->
+    <div id="scoreDisplay" class="hud-panel score-display">
+        <span class="hud-icon">⭐</span>
+        <span id="scoreText">0</span>
+    </div>
+
+    <!-- HUD Top-Right: Room Info -->
+    <div class="hud-panel room-info" id="roomInfoBtn">
+        <div id="roomInfo" class="room-name">Phòng: —</div>
+        <div id="playerCount" class="player-count">👥 0</div>
+    </div>
+
+    <!-- Controls hint bottom-left -->
+    <div class="controls-hint" id="controlsHint">
+        <div class="hint-row"><kbd>WASD</kbd><kbd>↑←↓→</kbd> Di chuyển</div>
+        <div class="hint-row"><kbd>Space</kbd> Nhún</div>
+        <div class="hint-row"><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd><kbd>5</kbd> Reaction</div>
+    </div>
+
+    <!-- Chat Input -->
+    <div class="chat-input-container">
+        <div class="chat-input-wrapper">
+            <input type="text" id="chatInput" placeholder="Nhắn gì đó..." maxlength="512">
+            <button id="sendMessage" class="send-btn">➤</button>
+        </div>
+        <div class="char-counter"><span id="charCount">0</span>/512</div>
+    </div>
+
+    <!-- Room Modal -->
+    <div id="roomModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>🏠 Thông tin phòng</h3>
+                <span class="close" id="closeModal">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div class="room-details">
+                    <div class="detail-row">
+                        <span class="detail-label">Phòng</span>
+                        <span id="modalRoomId" class="detail-value"></span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Người chơi</span>
+                        <span id="modalPlayerCount" class="detail-value"></span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Điểm của bạn</span>
+                        <span id="modalYourScore" class="detail-value score-val"></span>
+                    </div>
+                </div>
+
+                <div class="leaderboard-section">
+                    <h4 class="lb-title">🏆 Bảng xếp hạng</h4>
+                    <div id="leaderboard" class="leaderboard"></div>
+                </div>
+
+                <div class="room-actions">
+                    <button id="copyRoomId" class="btn btn-secondary">📋 Sao chép ID</button>
+                    <button id="leaveRoom" class="btn btn-danger">🚪 Rời phòng</button>
                 </div>
             </div>
         </div>
     </div>
+</div>
 
-    <!-- Game Screen -->
-    <div id="gameScreen" class="screen">
-        <!-- Score Display -->
-        <div id="scoreDisplay" class="score-display">
-            <span id="scoreText">Score: 0</span>
+<!-- Message Full-Text Modal -->
+<div id="messageModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="messageModalUser">💬 Tin nhắn</h3>
+            <span class="close" id="closeMessageModal">&times;</span>
         </div>
-
-        <!-- Game Canvas -->
-        <div id="gameCanvas" class="game-canvas">
-            <!-- Users will be rendered here -->
-        </div>
-
-        <!-- Chat Input -->
-        <div class="chat-input-container">
-            <div class="chat-input-wrapper">
-                <input type="text" id="chatInput" placeholder="Type your message..." maxlength="512">
-                <button id="sendMessage" class="send-btn">Send</button>
-            </div>
-            <div class="char-counter">
-                <span id="charCount">0</span>/512
-            </div>
-        </div>
-
-        <!-- Room Info -->
-        <div class="room-info" id="roomInfoBtn">
-            <span id="roomInfo">Room: </span>
-            <span id="playerCount">Players: 0</span>
-        </div>
-        
-        <!-- Room Info Modal -->
-        <div id="roomModal" class="modal">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h3>Room Information</h3>
-                    <span class="close" id="closeModal">&times;</span>
-                </div>
-                <div class="modal-body">
-                    <div class="room-details">
-                        <p><strong>Room ID:</strong> <span id="modalRoomId"></span></p>
-                        <p><strong>Players Online:</strong> <span id="modalPlayerCount"></span></p>
-                        <p><strong>Your Score:</strong> <span id="modalYourScore"></span></p>
-                    </div>
-                    <div class="room-actions">
-                        <button id="leaveRoom" class="btn btn-danger">Leave Room</button>
-                        <button id="copyRoomId" class="btn btn-secondary">Copy Room ID</button>
-                    </div>
-                </div>
-            </div>
+        <div class="modal-body">
+            <p id="messageModalText" class="message-full-text"></p>
         </div>
     </div>
+</div>
 
-        <!-- Message Content Modal -->
-        <div id="messageModal" class="modal">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h3 id="messageModalUser">💬 Tin nhắn</h3>
-                    <span class="close" id="closeMessageModal">&times;</span>
-                </div>
-                <div class="modal-body">
-                    <p id="messageModalText" class="message-full-text"></p>
-                </div>
-            </div>
-        </div>
+<!-- Notification System -->
+<div id="notificationContainer" class="notification-container"></div>
 
-    <!-- Notification System -->
-    <div id="notificationContainer" class="notification-container"></div>
-
-    <script src="script.js"></script>
+<script src="script.js"></script>
 </body>
 </html>

@@ -135,6 +135,40 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Pop/bounce visible to others
+  socket.on('popUser', (data) => {
+    const { roomId } = data;
+    socket.to(roomId).emit('userPopped', { userId: socket.id });
+  });
+
+  // Typing indicator
+  socket.on('typing', (data) => {
+    const { roomId } = data;
+    socket.to(roomId).emit('userTyping', { userId: socket.id });
+  });
+
+  // Emoji reaction
+  socket.on('reaction', (data) => {
+    const { roomId, emoji } = data;
+    const room = rooms.get(roomId);
+    if (room && room.users.has(socket.id)) {
+      const user = room.users.get(socket.id);
+      io.to(roomId).emit('userReaction', { userId: socket.id, emoji, x: user.x, y: user.y });
+    }
+  });
+
+  // Explicit leave room
+  socket.on('leaveRoom', (data) => {
+    const { roomId } = data;
+    const room = rooms.get(roomId);
+    if (room && room.users.has(socket.id)) {
+      room.users.delete(socket.id);
+      socket.leave(roomId);
+      if (room.users.size === 0) rooms.delete(roomId);
+      else socket.to(roomId).emit('userLeft', socket.id);
+    }
+  });
+
   // Handle disconnection
   socket.on('disconnect', () => {
     console.log('User disconnected:', socket.id);
